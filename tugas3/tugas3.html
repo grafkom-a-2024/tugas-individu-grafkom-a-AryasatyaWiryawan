@@ -1,0 +1,241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Tugas 3 - WebGL 3D Scene</title>
+  <style>
+    canvas { width: 100%; height: 100%; display: block; }
+  </style>
+</head>
+<body>
+  <canvas id="glcanvas"></canvas>
+  <script id="vertex-shader" type="x-shader/x-vertex">
+    attribute vec4 a_position;
+    attribute vec3 a_normal;
+    attribute vec2 a_texcoord;
+
+    uniform mat4 u_worldViewProjection;
+    uniform mat4 u_worldInverseTranspose;
+    uniform mat4 u_world;
+    
+    varying vec3 v_normal;
+    varying vec2 v_texcoord;
+    varying vec3 v_worldPosition;
+
+    void main() {
+      gl_Position = u_worldViewProjection * a_position;
+      v_worldPosition = (u_world * a_position).xyz;
+      v_normal = mat3(u_worldInverseTranspose) * a_normal;
+      v_texcoord = a_texcoord;
+    }
+  </script>
+
+  <script id="fragment-shader" type="x-shader/x-fragment">
+    precision mediump float;
+    
+    uniform vec3 u_lightWorldPosition;
+    uniform vec3 u_viewWorldPosition;
+    uniform vec4 u_color;
+    uniform sampler2D u_texture;
+    uniform bool u_useTexture;
+    
+    varying vec3 v_normal;
+    varying vec2 v_texcoord;
+    varying vec3 v_worldPosition;
+
+    void main() {
+      vec3 normal = normalize(v_normal);
+      vec3 surfaceToLightDir = normalize(u_lightWorldPosition - v_worldPosition);
+      vec3 surfaceToViewDir = normalize(u_viewWorldPosition - v_worldPosition);
+      vec3 halfVector = normalize(surfaceToLightDir + surfaceToViewDir);
+      
+      float light = dot(normal, surfaceToLightDir);
+      float specular = pow(dot(normal, halfVector), 50.0);
+      
+      vec4 textureColor = texture2D(u_texture, v_texcoord);
+      vec4 baseColor = u_useTexture ? textureColor : u_color;
+
+      gl_FragColor = baseColor * light + vec4(vec3(specular), 1.0);
+    }
+  </script>
+
+  <script>
+    function main() {
+      const canvas = document.getElementById("glcanvas");
+      const gl = canvas.getContext("webgl");
+      if (!gl) return alert("WebGL not supported");
+
+      // Initialize shaders and program
+      const program = initShaderProgram(gl, "vertex-shader", "fragment-shader");
+      const attribLocations = {
+        position: gl.getAttribLocation(program, "a_position"),
+        normal: gl.getAttribLocation(program, "a_normal"),
+        texcoord: gl.getAttribLocation(program, "a_texcoord"),
+      };
+      const uniformLocations = {
+        worldViewProjection: gl.getUniformLocation(program, "u_worldViewProjection"),
+        worldInverseTranspose: gl.getUniformLocation(program, "u_worldInverseTranspose"),
+        world: gl.getUniformLocation(program, "u_world"),
+        color: gl.getUniformLocation(program, "u_color"),
+        texture: gl.getUniformLocation(program, "u_texture"),
+        useTexture: gl.getUniformLocation(program, "u_useTexture"),
+        lightWorldPosition: gl.getUniformLocation(program, "u_lightWorldPosition"),
+        viewWorldPosition: gl.getUniformLocation(program, "u_viewWorldPosition"),
+      };
+
+      const objects = [
+        createCube(gl),
+        createCylinder(gl),
+        createCone(gl),
+        createLatheObject(gl),
+      ];
+
+      const textures = {
+        crate: loadTexture(gl, 'crate_texture.jpg'),
+      };
+
+      const camera = createCamera(gl);
+
+      function render(time) {
+        time *= 0.001;
+        
+        resizeCanvas(gl.canvas);
+        gl.viewport(0, 0, gl.canvas.width, gl.canvas.height);
+        gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+
+        gl.useProgram(program);
+        gl.enable(gl.DEPTH_TEST);
+        gl.enable(gl.CULL_FACE);
+
+        const projectionMatrix = mat4.perspective(mat4.create(), Math.PI / 4, gl.canvas.clientWidth / gl.canvas.clientHeight, 0.1, 100);
+        const cameraMatrix = mat4.lookAt(mat4.create(), camera.position, [0, 0, 0], [0, 1, 0]);
+        const viewProjectionMatrix = mat4.multiply(mat4.create(), projectionMatrix, cameraMatrix);
+
+        objects.forEach((object, idx) => {
+          const worldMatrix = mat4.create();
+          mat4.translate(worldMatrix, worldMatrix, [idx * 2 - 4, 0, -8]);
+          mat4.rotate(worldMatrix, worldMatrix, time + idx, [0, 1, 0]);
+          mat4.scale(worldMatrix, worldMatrix, [1, 1, 1]);
+
+          const worldInverseTranspose = mat4.invert(mat4.create(), worldMatrix);
+          mat4.transpose(worldInverseTranspose, worldInverseTranspose);
+
+          const worldViewProjection = mat4.multiply(mat4.create(), viewProjectionMatrix, worldMatrix);
+
+          gl.uniformMatrix4fv(uniformLocations.worldViewProjection, false, worldViewProjection);
+          gl.uniformMatrix4fv(uniformLocations.worldInverseTranspose, false, worldInverseTranspose);
+          gl.uniformMatrix4fv(uniformLocations.world, false, worldMatrix);
+          gl.uniform3fv(uniformLocations.lightWorldPosition, [10, 10, 10]);
+          gl.uniform3fv(uniformLocations.viewWorldPosition, camera.position);
+
+          gl.uniform4f(uniformLocations.color, 0.8, 0.8, 0.8, 1.0);
+          gl.activeTexture(gl.TEXTURE0);
+          gl.bindTexture(gl.TEXTURE_2D, textures.crate);
+          gl.uniform1i(uniformLocations.texture, 0);
+          gl.uniform1i(uniformLocations.useTexture, true);
+
+          object.render(gl, attribLocations);
+        });
+
+        requestAnimationFrame(render);
+      }
+      requestAnimationFrame(render);
+    }
+
+    function createCube(gl) {
+      const positions = [
+        -1, -1, -1,  1, -1, -1,  1,  1, -1, -1,  1, -1,
+        -1, -1,  1,  1, -1,  1,  1,  1,  1, -1,  1,  1,
+      ];
+      const texcoords = [0, 0, 1, 0, 1, 1, 0, 1];
+      const normals = [
+        0, 0, -1,  0, 0, -1,  0, 0, -1,  0, 0, -1,
+      ];
+
+      return createObject(gl, positions, texcoords, normals);
+    }
+
+    function createCylinder(gl) {
+      // Similar to Cube: Generate Cylinder Geometry Here
+    }
+
+    function createCone(gl) {
+      // Similar to Cube: Generate Cone Geometry Here
+    }
+
+    function createLatheObject(gl) {
+      // Lathe implementation (rotating a 2D profile along Y-axis)
+    }
+
+    function createObject(gl, positions, texcoords, normals) {
+      const vao = gl.createVertexArray();
+      gl.bindVertexArray(vao);
+
+      createBuffer(gl, positions, 3, gl.FLOAT, false, 0, 0);
+      createBuffer(gl, texcoords, 2, gl.FLOAT, false, 0, 0);
+      createBuffer(gl, normals, 3, gl.FLOAT, false, 0, 0);
+
+      return {
+        render: function(gl, attribLocations) {
+          gl.bindVertexArray(vao);
+          gl.drawArrays(gl.TRIANGLE_STRIP, 0, positions.length / 3);
+        }
+      };
+    }
+
+    function loadTexture(gl, url) {
+      const texture = gl.createTexture();
+      const image = new Image();
+      image.src = url;
+      image.onload = () => {
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, image);
+        gl.generateMipmap(gl.TEXTURE_2D);
+      };
+      return texture;
+    }
+
+    function resizeCanvas(canvas) {
+      const displayWidth  = canvas.clientWidth;
+      const displayHeight = canvas.clientHeight;
+      if (canvas.width  !== displayWidth || canvas.height !== displayHeight) {
+        canvas.width  = displayWidth;
+        canvas.height = displayHeight;
+      }
+    }
+
+    function initShaderProgram(gl, vsSourceId, fsSourceId) {
+      const vsSource = document.getElementById(vsSourceId).text;
+      const fsSource = document.getElementById(fsSourceId).text;
+      const vertexShader = loadShader(gl, gl.VERTEX_SHADER, vsSource);
+      const fragmentShader = loadShader(gl, gl.FRAGMENT_SHADER, fsSource);
+
+      const shaderProgram = gl.createProgram();
+      gl.attachShader(shaderProgram, vertexShader);
+      gl.attachShader(shaderProgram, fragmentShader);
+      gl.linkProgram(shaderProgram);
+
+      if (!gl.getProgramParameter(shaderProgram, gl.LINK_STATUS)) {
+        alert('Failed to initialize shaders');
+        return null;
+      }
+      return shaderProgram;
+    }
+
+    function loadShader(gl, type, source) {
+      const shader = gl.createShader(type);
+      gl.shaderSource(shader, source);
+      gl.compileShader(shader);
+
+      if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+        alert('Shader compilation failed');
+        return null;
+      }
+      return shader;
+    }
+
+    window.onload = main;
+  </script>
+</body>
+</html>
